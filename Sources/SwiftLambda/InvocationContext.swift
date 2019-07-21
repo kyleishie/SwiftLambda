@@ -9,11 +9,11 @@ import Foundation
 
 public protocol InvocationContext {
     
-    var awsRequestId : String? { get }
+    var awsRequestId : String! { get }
     
-    var deadlineMs : String? { get }
+    var deadlineMs : String! { get }
     
-    var invokedFunctionARN : String? { get }
+    var invokedFunctionARN : String! { get }
     
     var traceId : String? { get }
     

@@ -10,15 +10,15 @@ import NIOHTTP1
 
 public extension HTTPHeaders {
     
-    var awsRequestId : String? {
+    var awsRequestId : String! {
         return self["Lambda-Runtime-Aws-Request-Id"].first
     }
     
-    var deadlineMs : String? {
+    var deadlineMs : String! {
         return self["Lambda-Runtime-Deadline-Ms"].first
     }
     
-    var invokedFunctionARN : String? {
+    var invokedFunctionARN : String! {
         return self["Lambda-Runtime-Invoked-Function-Arn"].first
     }
     

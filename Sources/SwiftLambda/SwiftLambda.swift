@@ -5,86 +5,92 @@ import NIOHTTP1
 
 public final class SwiftLambda {
     
+    private let eventLoopGroup : MultiThreadedEventLoopGroup
     private let httpClient : HTTPClient
     private var environment : Environment
     
     public init(environment: Environment) {
-        self.httpClient = HTTPClient(eventLoopGroupProvider: .createNew)
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
         self.environment = environment
+        self.eventLoopGroup = eventLoopGroup
     }
     
     deinit {
         try? httpClient.syncShutdown()
     }
-
+    
 }
 
 public extension SwiftLambda {
     
-    typealias SyncHandler<Input : Codable, Output : Codable> = (Input, InvocationContext) throws -> Output
-    typealias AsyncHandler<Input : Codable, Output : Codable> = (Input, InvocationContext, (Output) throws -> Void) throws -> Void
+    typealias SyncHandler<I : Decodable, O : Encodable> = (I, InvocationContext) throws -> O
+    typealias AsyncHandler<I : Decodable, O : Encodable> = (I, InvocationContext) throws -> EventLoopFuture<O>
     
-    func async<Input : Codable, Output : Codable>(_ handler: AsyncHandler<Input, Output>) throws {
-        var invocationCount = 0
-        while true {
-            let (headers, data) = try nextInvocation()
-            invocationCount += 1
-            log("Invocation Count: \(invocationCount)")
-            
-            guard let requestId = headers.awsRequestId else {
-                throw Error.missingAWSRequestId
-            }
-            environment.traceId = headers.traceId
-            
-            let input = try JSONDecoder().decode(Input.self, from: data)
-            do {
-                try handler(input, headers, { [weak self] output in
-                    let data = try JSONEncoder().encode(output)
-                    try self?.postInvocationResponse(for: requestId, responseData: data)
-                })
-            } catch {
-                try postInvocationError(for: requestId, error: error)
-            }
+    func sync<Input : Codable, Output : Codable>(_ handler: @escaping SyncHandler<Input, Output>) throws {
+        try async { [eventLoopGroup] (input: Input, context: InvocationContext) -> EventLoopFuture<Output> in
+            let output = try handler(input, context)
+            return eventLoopGroup.next().makeSucceededFuture(output)
         }
-        
     }
     
-    func sync<Input : Codable, Output : Codable>(_ handler: SyncHandler<Input, Output>) throws {
-        try async { (input: Input, context: InvocationContext, respondWith: ((Output) throws -> Void)) in
-            let output = try handler(input, context)
-            try respondWith(output)
-        }
+    func async<Input : Decodable, Output : Encodable>(_ handler: @escaping AsyncHandler<Input, Output>) throws {
+        var invocationCount = 0
+        repeat {
+            invocationCount += 1
+            
+            do {
+                /// Get Next Invocation request
+                _ = try httpClient.lambdaGETNextInvocation(runtimeAPI: environment.runtimeAPI)
+                    
+                    /// Parse Response
+                    .flatMapThrowing({ response -> (Data, InvocationContext) in
+                        guard var body = response.body else {
+                            throw InvocationError.missingInputData(response.headers)
+                        }
+                        guard let inputBytes = body.readBytes(length: body.readableBytes) else {
+                            throw InvocationError.unreadableInputData(response.headers)
+                        }
+                        return (Data(inputBytes), response.headers)
+                    })
+                    
+                    /// Decode Event Data to Input
+                    .flatMapThrowing({ inputData, context -> (Input, InvocationContext) in
+                        let input = try JSONDecoder().decode(Input.self, from: inputData)
+                        return (input, context)
+                    })
+                    
+                    /// Call Handler
+                    .flatMapThrowing({ (input, context) -> (Output, InvocationContext) in
+                        let output = try handler(input, context).wait()
+                        return (output, context)
+                    })
+                    
+                    /// Encode Handler Output to Data
+                    .flatMapThrowing({ (output, context) -> (Data, InvocationContext) in
+                        let outputData = try JSONEncoder().encode(output)
+                        return (outputData, context)
+                    })
+                    
+                    /// Post Invocation Response
+                    .flatMap({ [environment, httpClient] (outputData, context) -> EventLoopFuture<HTTPClient.Response> in
+                        httpClient.lambdaPOSTInvocationResponse(runtimeAPI: environment.runtimeAPI, for: context.awsRequestId, responseData: outputData)
+                    })
+                    
+                    /// Wait for the chain to finish before starting the next invocation.
+                    .wait()
+                
+            } catch let error as InvocationError {
+                /// Post Invocation Error
+                _ = try httpClient
+                    .lambdaPOSTInvocationError(runtimeAPI: environment.runtimeAPI, for: error.context.awsRequestId, error: error)
+                    .wait()
+            }
+            
+        } while true
     }
     
 }
 
-private extension SwiftLambda {
-    
-    func nextInvocation() throws -> (HTTPHeaders, Data) {
-        let response = try httpClient.get(url: "http://\(environment.runtimeAPI)/2018-06-01/runtime/invocation/next").wait()
-        
-        guard var body = response.body else {
-            throw Error.missingInvocationRequestData
-        }
-        guard let bodyBytes = body.readBytes(length: body.readableBytes) else {
-            throw Error.invalidInvocationRequestData
-        }
-        
-        let headers = response.headers
-        
-        return (headers, Data(bodyBytes))
-    }
-    
-    func postInvocationResponse(for requestId: String, responseData: Data) throws {
-        _ = try httpClient.post(url: "http://\(environment.runtimeAPI)/2018-06-01/runtime/invocation/\(requestId)/response", body: .data(responseData)).wait()
-    }
-    
-    func postInvocationError(for requestId: String, error: Swift.Error) throws {
-        let invocationError = InvocationError(error)
-        let body = try JSONEncoder().encode(invocationError)
-        _ = try httpClient.post(url: "http://\(environment.runtimeAPI)/2018-06-01/runtime/invocation/\(requestId)/response", body: .data(body)).wait()
-    }
-    
-}
 
 
