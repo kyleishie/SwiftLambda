@@ -1,3 +1,3 @@
 # SwiftLambda
 
-A description of this package.
+A lightweight runtime for Swift on AWS Lambda.
