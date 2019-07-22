@@ -10,24 +10,24 @@ import Foundation
 
 public struct Environment {
     
-    public let handler : String
-    public let region : String
-    public let executionEnv : String
-    public let functionName : String
-    public let memorySize : String
-    public let version : String
-    public let logGroupName : String
-    public let logStreamName : String
-    public let accessKeyId : String
-    public let secretAccessKey : String
-    public let sessionToken : String
-    public let lang : String
-    public let timezone : String
-    public let taskRoot : String
-    public let runtimeDir : String
-    public let path : String
-    public let libraryPath : String
     public let runtimeAPI : String
+    public let handler : String?
+    public let region : String?
+    public let executionEnv : String?
+    public let functionName : String?
+    public let memorySize : String?
+    public let version : String?
+    public let logGroupName : String?
+    public let logStreamName : String?
+    public let accessKeyId : String?
+    public let secretAccessKey : String?
+    public let sessionToken : String?
+    public let lang : String?
+    public let timezone : String?
+    public let taskRoot : String?
+    public let runtimeDir : String?
+    public let path : String?
+    public let libraryPath : String?
     
     public var traceId : String? {
         didSet {
